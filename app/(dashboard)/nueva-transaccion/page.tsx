@@ -1,14 +1,33 @@
-import { createTransactionAction } from '../transactions-actions'
+'use client'
+
+import { useFormState, useFormStatus } from 'react-dom'
+import {
+  createTransactionAction,
+  type CreateTxFormState,
+} from '../transactions-actions'
+
+const initialState: CreateTxFormState = undefined
 
 export default function NuevaTransaccionPage() {
+  const [state, formAction] = useFormState(
+    createTransactionAction,
+    initialState,
+  )
+
   return (
     <div className="max-w-md">
       <h1 className="text-2xl font-semibold mb-4">Nueva transacción</h1>
 
       <form
-        action={createTransactionAction}
+        action={formAction}
         className="space-y-4 bg-white p-6 rounded-lg shadow"
       >
+        {state?.error && (
+          <div className="bg-red-50 border border-red-200 text-red-800 text-sm rounded px-3 py-2">
+            {state.error}
+          </div>
+        )}
+
         <label className="block">
           <span className="text-sm font-medium">Monto (MXN)</span>
           <input
@@ -57,13 +76,21 @@ export default function NuevaTransaccionPage() {
           />
         </label>
 
-        <button
-          type="submit"
-          className="w-full bg-black text-white rounded py-2 font-medium hover:bg-gray-800"
-        >
-          Crear transacción
-        </button>
+        <SubmitButton>Crear transacción</SubmitButton>
       </form>
     </div>
+  )
+}
+
+function SubmitButton({ children }: { children: React.ReactNode }) {
+  const { pending } = useFormStatus()
+  return (
+    <button
+      type="submit"
+      disabled={pending}
+      className="w-full bg-black text-white rounded py-2 font-medium hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+    >
+      {pending ? 'Creando…' : children}
+    </button>
   )
 }

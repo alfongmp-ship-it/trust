@@ -4,7 +4,12 @@ import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 
-export async function signUpAction(formData: FormData) {
+export type AuthFormState = { error: string } | undefined
+
+export async function signUpAction(
+  _prevState: AuthFormState,
+  formData: FormData,
+): Promise<AuthFormState> {
   const supabase = createClient()
 
   const email = formData.get('email') as string
@@ -18,13 +23,16 @@ export async function signUpAction(formData: FormData) {
     options: { data: { full_name, phone } },
   })
 
-  if (error) throw new Error(error.message)
+  if (error) return { error: error.message }
 
   revalidatePath('/', 'layout')
   redirect('/dashboard')
 }
 
-export async function signInAction(formData: FormData) {
+export async function signInAction(
+  _prevState: AuthFormState,
+  formData: FormData,
+): Promise<AuthFormState> {
   const supabase = createClient()
 
   const email = formData.get('email') as string
@@ -32,7 +40,7 @@ export async function signInAction(formData: FormData) {
 
   const { error } = await supabase.auth.signInWithPassword({ email, password })
 
-  if (error) throw new Error(error.message)
+  if (error) return { error: error.message }
 
   revalidatePath('/', 'layout')
   redirect('/dashboard')

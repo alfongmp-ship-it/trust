@@ -4,7 +4,12 @@ import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 
-export async function createTransactionAction(formData: FormData) {
+export type CreateTxFormState = { error: string } | undefined
+
+export async function createTransactionAction(
+  _prevState: CreateTxFormState,
+  formData: FormData,
+): Promise<CreateTxFormState> {
   const supabase = createClient()
   const {
     data: { user },
@@ -29,7 +34,7 @@ export async function createTransactionAction(formData: FormData) {
     .select('id')
     .single()
 
-  if (error) throw new Error(error.message)
+  if (error) return { error: error.message }
 
   revalidatePath('/dashboard')
   redirect(`/transaccion/${data.id}`)
