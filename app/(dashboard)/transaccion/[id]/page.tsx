@@ -1,6 +1,13 @@
 import { notFound } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { claimTransactionAction } from '../../transactions-actions'
+import {
+  claimTransactionAction,
+  markPaidAction,
+  markDeliveredAction,
+  markCompletedAction,
+  openDisputeAction,
+  closeDisputeAction,
+} from '../../transactions-actions'
 import {
   formatCurrency,
   formatDate,
@@ -70,39 +77,156 @@ export default async function TransaccionPage({
           label="Fecha límite entrega"
           value={formatDate(tx.delivery_deadline)}
         />
+        {tx.delivered_at && (
+          <Row label="Entregado el" value={formatDate(tx.delivered_at)} />
+        )}
+        {tx.release_at && (
+          <Row label="Completado el" value={formatDate(tx.release_at)} />
+        )}
         <Row label="Creada" value={formatDate(tx.created_at)} />
       </dl>
 
-      {canClaim && (
-        <form
-          action={claimTransactionAction.bind(null, tx.id)}
-          className="mt-4"
-        >
-          <button
-            type="submit"
-            className="bg-black text-white rounded px-4 py-2 font-medium hover:bg-gray-800"
-          >
-            Reclamar como comprador
-          </button>
-          <p className="text-xs text-gray-500 mt-2">
-            Al reclamar quedas registrado como comprador de esta transacción.
-          </p>
-        </form>
-      )}
-
-      {isSeller && !tx.buyer_id && (
-        <div className="mt-4 bg-blue-50 border border-blue-200 rounded p-4 text-sm">
-          <div className="font-medium mb-1">Aún no hay comprador.</div>
-          <div className="text-gray-700">
-            Comparte este link con tu comprador para que lo reclame:
-          </div>
-          <code className="block mt-2 bg-white border rounded px-2 py-1 text-xs break-all">
-            http://localhost:3000/transaccion/{tx.id}
-          </code>
-        </div>
-      )}
+      <Actions tx={tx} isSeller={isSeller} isBuyer={isBuyer} canClaim={canClaim} />
     </div>
   )
+}
+
+function Actions({
+  tx,
+  isSeller,
+  isBuyer,
+  canClaim,
+}: {
+  tx: TransactionWithParties
+  isSeller: boolean
+  isBuyer: boolean
+  canClaim: boolean
+}) {
+  // 1. Sin buyer todavía
+  if (canClaim) {
+    return (
+      <form
+        action={claimTransactionAction.bind(null, tx.id)}
+        className="mt-4"
+      >
+        <button type="submit" className={btnPrimary}>
+          Reclamar como comprador
+        </button>
+        <p className="text-xs text-gray-500 mt-2">
+          Al reclamar quedas registrado como comprador de esta transacción.
+        </p>
+      </form>
+    )
+  }
+
+  if (isSeller && !tx.buyer_id) {
+    return (
+      <div className="mt-4 bg-blue-50 border border-blue-200 rounded p-4 text-sm">
+        <div className="font-medium mb-1">Aún no hay comprador.</div>
+        <div className="text-gray-700">
+          Comparte este link con tu comprador para que lo reclame:
+        </div>
+        <code className="block mt-2 bg-white border rounded px-2 py-1 text-xs break-all">
+          http://localhost:3000/transaccion/{tx.id}
+        </code>
+      </div>
+    )
+  }
+
+  // 2. Ya con buyer — botones según status + rol
+  if (tx.status === 'esperando_pago') {
+    return isBuyer ? (
+      <form action={markPaidAction.bind(null, tx.id)} className="mt-4">
+        <button type="submit" className={btnPrimary}>
+          Confirmar pago
+        </button>
+        <p className="text-xs text-gray-500 mt-2">
+          Marca esta transacción como pagada para que el vendedor proceda a entregarte.
+        </p>
+      </form>
+    ) : (
+      <Info text="Esperando que el comprador confirme el pago." />
+    )
+  }
+
+  if (tx.status === 'pendiente_entrega') {
+    if (isSeller) {
+      return (
+        <form action={markDeliveredAction.bind(null, tx.id)} className="mt-4">
+          <button type="submit" className={btnPrimary}>
+            Marcar como entregado
+          </button>
+          <p className="text-xs text-gray-500 mt-2">
+            Confirma que ya entregaste lo acordado al comprador.
+          </p>
+        </form>
+      )
+    }
+    return (
+      <div className="mt-4 space-y-3">
+        <Info text="Esperando que el vendedor entregue." />
+        <form action={openDisputeAction.bind(null, tx.id)}>
+          <button type="submit" className={btnDanger}>
+            Abrir disputa
+          </button>
+          <p className="text-xs text-gray-500 mt-2">
+            Si hay un problema con la entrega, abre una disputa.
+          </p>
+        </form>
+      </div>
+    )
+  }
+
+  if (tx.status === 'en_revision') {
+    if (isBuyer) {
+      return (
+        <div className="mt-4 space-y-3">
+          <form action={markCompletedAction.bind(null, tx.id)}>
+            <button type="submit" className={btnSuccess}>
+              Aprobar y completar
+            </button>
+            <p className="text-xs text-gray-500 mt-2">
+              Confirma que recibiste lo acordado y libera el pago al vendedor.
+            </p>
+          </form>
+          <form action={openDisputeAction.bind(null, tx.id)}>
+            <button type="submit" className={btnDanger}>
+              Abrir disputa
+            </button>
+          </form>
+        </div>
+      )
+    }
+    return <Info text="Esperando que el comprador apruebe la entrega." />
+  }
+
+  if (tx.status === 'en_disputa') {
+    return (
+      <div className="mt-4 space-y-3">
+        <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-900">
+          Esta transacción está en disputa.
+        </div>
+        <form action={closeDisputeAction.bind(null, tx.id)}>
+          <button type="submit" className={btnPrimary}>
+            Cerrar disputa
+          </button>
+          <p className="text-xs text-gray-500 mt-2">
+            Cerrar la disputa la regresa a "En revisión" para que el comprador apruebe o re-dispute.
+          </p>
+        </form>
+      </div>
+    )
+  }
+
+  if (tx.status === 'completado') {
+    return (
+      <div className="mt-4 bg-green-50 border border-green-200 rounded p-4 text-sm text-green-900">
+        Transacción completada{tx.release_at ? ` el ${formatDate(tx.release_at)}` : ''}.
+      </div>
+    )
+  }
+
+  return null
 }
 
 function Row({
@@ -119,3 +243,18 @@ function Row({
     </div>
   )
 }
+
+function Info({ text }: { text: string }) {
+  return (
+    <div className="mt-4 bg-gray-50 border border-gray-200 rounded p-4 text-sm text-gray-700">
+      {text}
+    </div>
+  )
+}
+
+const btnPrimary =
+  'bg-black text-white rounded px-4 py-2 font-medium hover:bg-gray-800'
+const btnSuccess =
+  'bg-green-600 text-white rounded px-4 py-2 font-medium hover:bg-green-700'
+const btnDanger =
+  'bg-red-600 text-white rounded px-4 py-2 font-medium hover:bg-red-700'
