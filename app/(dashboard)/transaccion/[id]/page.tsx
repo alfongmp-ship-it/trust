@@ -1,4 +1,5 @@
 import { notFound } from 'next/navigation'
+import { headers } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
 import {
   claimTransactionAction,
@@ -120,6 +121,10 @@ function Actions({
   }
 
   if (isSeller && !tx.buyer_id) {
+    const h = headers()
+    const host = h.get('host') ?? 'localhost:3000'
+    const proto = h.get('x-forwarded-proto') ?? 'http'
+    const shareUrl = `${proto}://${host}/transaccion/${tx.id}`
     return (
       <div className="mt-4 bg-blue-50 border border-blue-200 rounded p-4 text-sm">
         <div className="font-medium mb-1">Aún no hay comprador.</div>
@@ -127,7 +132,7 @@ function Actions({
           Comparte este link con tu comprador para que lo reclame:
         </div>
         <code className="block mt-2 bg-white border rounded px-2 py-1 text-xs break-all">
-          http://localhost:3000/transaccion/{tx.id}
+          {shareUrl}
         </code>
       </div>
     )
