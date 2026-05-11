@@ -17,6 +17,7 @@ import {
   TYPE_LABELS,
 } from '@/lib/utils/format'
 import type { TransactionWithParties } from '@/lib/supabase/types'
+import { Checklist } from './checklist'
 
 export default async function TransaccionPage({
   params,
@@ -49,6 +50,11 @@ export default async function TransaccionPage({
 
   if (!isAuthorized) notFound()
 
+  const myRole: 'seller' | 'buyer' | null = isSeller ? 'seller' : isBuyer ? 'buyer' : null
+
+  const negotiationStatuses = ['borrador_lista', 'negociando_lista', 'lista_acordada']
+  const canNegotiate = negotiationStatuses.includes(tx.status)
+
   return (
     <div className="max-w-2xl">
       <div className="flex items-center justify-between mb-4">
@@ -74,18 +80,26 @@ export default async function TransaccionPage({
             tx.buyer?.full_name ?? tx.buyer?.email ?? '— sin asignar —'
           }
         />
-        <Row
-          label="Fecha límite entrega"
-          value={formatDate(tx.delivery_deadline)}
-        />
-        {tx.delivered_at && (
-          <Row label="Entregado el" value={formatDate(tx.delivered_at)} />
+        <Row label="Fecha límite entrega" value={formatDate(tx.delivery_deadline)} />
+        {tx.paid_at && <Row label="Depósito" value={formatDate(tx.paid_at)} />}
+        {tx.delivery_uploaded_at && (
+          <Row label="Entregado el" value={formatDate(tx.delivery_uploaded_at)} />
         )}
-        {tx.release_at && (
-          <Row label="Completado el" value={formatDate(tx.release_at)} />
-        )}
+        {tx.resolved_at && <Row label="Resuelta el" value={formatDate(tx.resolved_at)} />}
         <Row label="Creada" value={formatDate(tx.created_at)} />
       </dl>
+
+      {myRole && (
+        <Checklist
+          txId={tx.id}
+          items={tx.checklist ?? []}
+          version={tx.checklist_version ?? 1}
+          lastProposedBy={tx.checklist_last_proposed_by}
+          myRole={myRole}
+          canNegotiate={canNegotiate}
+          hasBuyer={Boolean(tx.buyer_id)}
+        />
+      )}
 
       <Actions tx={tx} isSeller={isSeller} isBuyer={isBuyer} canClaim={canClaim} />
     </div>
@@ -103,7 +117,7 @@ function Actions({
   isBuyer: boolean
   canClaim: boolean
 }) {
-  // 1. Sin buyer todavía
+  // Unclaimed: buyer (no seller) puede reclamar
   if (canClaim) {
     return (
       <form
@@ -120,6 +134,7 @@ function Actions({
     )
   }
 
+  // Seller sin buyer todavía: share link
   if (isSeller && !tx.buyer_id) {
     const h = headers()
     const host = h.get('host') ?? 'localhost:3000'
@@ -138,16 +153,71 @@ function Actions({
     )
   }
 
-  // 2. Ya con buyer — botones según status + rol
+  // ============================================================
+  // v2 — flow nuevo (escrow notarial de documentos)
+  // ============================================================
+  if (tx.status === 'lista_acordada') {
+    return isBuyer ? (
+      <Info text="Lista acordada. Próximamente: botón para depositar los fondos (modo demo)." />
+    ) : (
+      <Info text="Lista acordada. Esperando que el comprador deposite los fondos." />
+    )
+  }
+
+  if (tx.status === 'pagada') {
+    return isSeller ? (
+      <Info text="Fondos depositados. Próximamente: sube el PDF del documento entregado." />
+    ) : (
+      <Info text="Fondos depositados. Esperando que el vendedor entregue el documento." />
+    )
+  }
+
+  if (tx.status === 'entregada') {
+    return isBuyer ? (
+      <Info text="Documento entregado. Próximamente: ver preview y aceptar / pedir edición / disputar." />
+    ) : (
+      <Info text="Documento entregado. Esperando que el comprador revise." />
+    )
+  }
+
+  if (tx.status === 'en_edicion') {
+    return isSeller ? (
+      <Info text="El comprador pidió una edición. Próximamente: sube la nueva versión." />
+    ) : (
+      <Info text="Edición solicitada. Esperando al vendedor." />
+    )
+  }
+
+  if (tx.status === 'completada') {
+    return (
+      <div className="mt-4 bg-green-50 border border-green-200 rounded p-4 text-sm text-green-900">
+        Transacción completada{tx.resolved_at ? ` el ${formatDate(tx.resolved_at)}` : ''}.
+      </div>
+    )
+  }
+
+  if (tx.status === 'reembolsada') {
+    return (
+      <div className="mt-4 bg-red-50 border border-red-200 rounded p-4 text-sm text-red-900">
+        Fondos reembolsados al comprador{tx.resolved_at ? ` el ${formatDate(tx.resolved_at)}` : ''}.
+      </div>
+    )
+  }
+
+  // Estados de negociación: el Checklist component ya tiene los botones.
+  if (tx.status === 'borrador_lista' || tx.status === 'negociando_lista') {
+    return null
+  }
+
+  // ============================================================
+  // Legacy v1 — backwards compatibility para txs antes del pivot.
+  // ============================================================
   if (tx.status === 'esperando_pago') {
     return isBuyer ? (
       <form action={markPaidAction.bind(null, tx.id)} className="mt-4">
         <button type="submit" className={btnPrimary}>
           Confirmar pago
         </button>
-        <p className="text-xs text-gray-500 mt-2">
-          Marca esta transacción como pagada para que el vendedor proceda a entregarte.
-        </p>
       </form>
     ) : (
       <Info text="Esperando que el comprador confirme el pago." />
@@ -161,9 +231,6 @@ function Actions({
           <button type="submit" className={btnPrimary}>
             Marcar como entregado
           </button>
-          <p className="text-xs text-gray-500 mt-2">
-            Confirma que ya entregaste lo acordado al comprador.
-          </p>
         </form>
       )
     }
@@ -174,9 +241,6 @@ function Actions({
           <button type="submit" className={btnDanger}>
             Abrir disputa
           </button>
-          <p className="text-xs text-gray-500 mt-2">
-            Si hay un problema con la entrega, abre una disputa.
-          </p>
         </form>
       </div>
     )
@@ -190,9 +254,6 @@ function Actions({
             <button type="submit" className={btnSuccess}>
               Aprobar y completar
             </button>
-            <p className="text-xs text-gray-500 mt-2">
-              Confirma que recibiste lo acordado y libera el pago al vendedor.
-            </p>
           </form>
           <form action={openDisputeAction.bind(null, tx.id)}>
             <button type="submit" className={btnDanger}>
@@ -215,9 +276,6 @@ function Actions({
           <button type="submit" className={btnPrimary}>
             Cerrar disputa
           </button>
-          <p className="text-xs text-gray-500 mt-2">
-            Cerrar la disputa la regresa a &quot;En revisión&quot; para que el comprador apruebe o re-dispute.
-          </p>
         </form>
       </div>
     )
