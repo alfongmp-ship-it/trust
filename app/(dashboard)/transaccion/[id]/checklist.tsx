@@ -16,6 +16,7 @@ type Props = {
   lastProposedBy: 'seller' | 'buyer' | null
   myRole: 'seller' | 'buyer'
   canNegotiate: boolean // status permite editar (borrador / negociando / acordada)
+  alreadyAgreed: boolean // lista ya en lista_acordada — sólo permite renegociar
   hasBuyer: boolean
 }
 
@@ -30,6 +31,7 @@ export function Checklist({
   lastProposedBy,
   myRole,
   canNegotiate,
+  alreadyAgreed,
   hasBuyer,
 }: Props) {
   const [editing, setEditing] = useState(false)
@@ -73,7 +75,11 @@ export function Checklist({
     })
   }
 
-  const myTurnToConfirm = canNegotiate && hasBuyer && lastProposedBy !== null && lastProposedBy !== myRole
+  // El botón "Confirmar" sólo aplica mientras la lista NO esté acordada todavía.
+  // Después de acordada se puede renegociar (proponer cambios), pero no re-confirmar.
+  const canConfirm = canNegotiate && !alreadyAgreed
+  const myTurnToConfirm =
+    canConfirm && hasBuyer && lastProposedBy !== null && lastProposedBy !== myRole
 
   if (editing) {
     return (

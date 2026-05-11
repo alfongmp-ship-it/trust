@@ -97,6 +97,7 @@ export default async function TransaccionPage({
           lastProposedBy={tx.checklist_last_proposed_by}
           myRole={myRole}
           canNegotiate={canNegotiate}
+          alreadyAgreed={tx.status === 'lista_acordada'}
           hasBuyer={Boolean(tx.buyer_id)}
         />
       )}
