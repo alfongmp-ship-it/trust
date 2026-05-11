@@ -216,7 +216,7 @@ function Actions({
             Cerrar disputa
           </button>
           <p className="text-xs text-gray-500 mt-2">
-            Cerrar la disputa la regresa a "En revisión" para que el comprador apruebe o re-dispute.
+            Cerrar la disputa la regresa a &quot;En revisión&quot; para que el comprador apruebe o re-dispute.
           </p>
         </form>
       </div>
