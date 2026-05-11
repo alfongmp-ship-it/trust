@@ -226,6 +226,153 @@ export async function confirmChecklistAction(
 }
 
 // ============================================================
+// v2 — Depósito simulado (Fase 2)
+// ============================================================
+
+// Buyer "deposita" — sólo cambia status + paid_at. En MVP no procesa
+// pago real; un sticker "Modo demo" en el layout deja eso claro.
+export async function simulatePaymentAction(transactionId: string) {
+  const supabase = createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) redirect('/login')
+
+  const { data, error } = await supabase
+    .from('transactions')
+    .update({
+      status: 'pagada',
+      paid_at: new Date().toISOString(),
+    })
+    .eq('id', transactionId)
+    .eq('status', 'lista_acordada')
+    .eq('buyer_id', user.id)
+    .select('id')
+
+  if (error) throw new Error(error.message)
+  if (!data || data.length === 0) {
+    throw new Error('No puedes depositar en este momento.')
+  }
+
+  await revalidateTx(transactionId)
+}
+
+// ============================================================
+// v2 — Upload del documento entregado (Fase 2)
+// ============================================================
+
+// Seller sube un PDF. Server-side aplica watermark al PDF original
+// con pdf-lib, guarda ambas versiones (original + watermarked) en
+// el bucket 'documents', registra 2 filas en files, y avanza la tx
+// a 'entregada'. Acepta también re-uploads cuando status='en_edicion'
+// (incrementa version).
+export async function uploadDocumentAction(
+  _prevState: { error: string } | undefined,
+  formData: FormData,
+): Promise<{ error: string } | undefined> {
+  const transactionId = formData.get('transactionId') as string
+  const file = formData.get('file') as File | null
+
+  if (!transactionId) return { error: 'Transacción inválida.' }
+  if (!file || file.size === 0) return { error: 'Sube un archivo PDF.' }
+  if (file.type !== 'application/pdf') return { error: 'El archivo debe ser PDF.' }
+  if (file.size > 5 * 1024 * 1024) return { error: 'El PDF no debe exceder 5 MB.' }
+
+  const supabase = createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) redirect('/login')
+
+  // Sólo el seller, sólo en estados que permiten entregar/re-entregar.
+  const { data: tx, error: txErr } = await supabase
+    .from('transactions')
+    .select('seller_id, status')
+    .eq('id', transactionId)
+    .single()
+  if (txErr || !tx) return { error: 'Transacción no encontrada.' }
+  if (tx.seller_id !== user.id) return { error: 'Sólo el vendedor puede subir el documento.' }
+  if (tx.status !== 'pagada' && tx.status !== 'en_edicion') {
+    return { error: 'No puedes entregar en este estado.' }
+  }
+
+  // Calcula la siguiente versión (count + 1) — soporta re-uploads.
+  const { count: existingCount } = await supabase
+    .from('files')
+    .select('*', { count: 'exact', head: true })
+    .eq('transaction_id', transactionId)
+    .eq('kind', 'original')
+  const version = (existingCount ?? 0) + 1
+
+  // Lee bytes del PDF y aplica watermark.
+  const originalBytes = new Uint8Array(await file.arrayBuffer())
+  let watermarkedBytes: Uint8Array
+  try {
+    const { applyWatermark } = await import('@/lib/pdf/watermark')
+    watermarkedBytes = await applyWatermark(originalBytes)
+  } catch {
+    return {
+      error:
+        'No se pudo procesar el PDF. Asegúrate de que no esté cifrado ni dañado.',
+    }
+  }
+
+  const originalPath = `${transactionId}/v${version}/original.pdf`
+  const watermarkedPath = `${transactionId}/v${version}/watermarked.pdf`
+
+  const up1 = await supabase.storage
+    .from('documents')
+    .upload(originalPath, originalBytes, {
+      contentType: 'application/pdf',
+      upsert: false,
+    })
+  if (up1.error) return { error: `Upload original falló: ${up1.error.message}` }
+
+  const up2 = await supabase.storage
+    .from('documents')
+    .upload(watermarkedPath, watermarkedBytes, {
+      contentType: 'application/pdf',
+      upsert: false,
+    })
+  if (up2.error) return { error: `Upload watermarked falló: ${up2.error.message}` }
+
+  // Inserta los 2 registros y avanza el status.
+  const { error: filesErr } = await supabase.from('files').insert([
+    {
+      transaction_id: transactionId,
+      version,
+      kind: 'original',
+      storage_path: originalPath,
+      uploaded_by: user.id,
+      file_type: 'application/pdf',
+    },
+    {
+      transaction_id: transactionId,
+      version,
+      kind: 'watermarked',
+      storage_path: watermarkedPath,
+      uploaded_by: user.id,
+      file_type: 'application/pdf',
+    },
+  ])
+  if (filesErr) return { error: `Error al guardar metadatos: ${filesErr.message}` }
+
+  const { error: statusErr } = await supabase
+    .from('transactions')
+    .update({
+      status: 'entregada',
+      delivery_uploaded_at: new Date().toISOString(),
+    })
+    .eq('id', transactionId)
+    .eq('seller_id', user.id)
+    .in('status', ['pagada', 'en_edicion'])
+  if (statusErr) return { error: `Error al actualizar status: ${statusErr.message}` }
+
+  await revalidateTx(transactionId)
+  return undefined
+}
+
+// ============================================================
 // Legacy v1 — se mantienen para no romper txs viejas, pero el
 // flow nuevo (documento) no las usa. Borrar en Fase 6 cuando
 // se valide que ninguna tx legacy queda en producción.

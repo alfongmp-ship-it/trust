@@ -18,6 +18,8 @@ import {
 } from '@/lib/utils/format'
 import type { TransactionWithParties } from '@/lib/supabase/types'
 import { Checklist } from './checklist'
+import { DepositButton } from './deposit-button'
+import { UploadForm } from './upload-form'
 
 export default async function TransaccionPage({
   params,
@@ -159,7 +161,7 @@ function Actions({
   // ============================================================
   if (tx.status === 'lista_acordada') {
     return isBuyer ? (
-      <Info text="Lista acordada. Próximamente: botón para depositar los fondos (modo demo)." />
+      <DepositButton txId={tx.id} amount={tx.amount} />
     ) : (
       <Info text="Lista acordada. Esperando que el comprador deposite los fondos." />
     )
@@ -167,9 +169,9 @@ function Actions({
 
   if (tx.status === 'pagada') {
     return isSeller ? (
-      <Info text="Fondos depositados. Próximamente: sube el PDF del documento entregado." />
+      <UploadForm txId={tx.id} label="Entregar documento" />
     ) : (
-      <Info text="Fondos depositados. Esperando que el vendedor entregue el documento." />
+      <Info text="Fondos depositados (modo demo). Esperando que el vendedor entregue el documento." />
     )
   }
 
@@ -183,7 +185,7 @@ function Actions({
 
   if (tx.status === 'en_edicion') {
     return isSeller ? (
-      <Info text="El comprador pidió una edición. Próximamente: sube la nueva versión." />
+      <UploadForm txId={tx.id} label="Subir nueva versión" />
     ) : (
       <Info text="Edición solicitada. Esperando al vendedor." />
     )
