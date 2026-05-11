@@ -395,7 +395,11 @@ function PreviewIframe({ url, label }: { url: string; label: string }) {
   return (
     <div className="bg-white border rounded overflow-hidden">
       <div className="text-xs px-3 py-2 bg-gray-50 border-b text-gray-600">{label}</div>
-      <iframe src={url} className="w-full h-[500px] border-0" title="Preview" />
+      <iframe
+        src={`${url}#toolbar=0&navpanes=0&scrollbar=0`}
+        className="w-full h-[500px] border-0"
+        title="Preview"
+      />
     </div>
   )
 }

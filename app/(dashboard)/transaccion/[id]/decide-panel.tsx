@@ -69,11 +69,11 @@ export function DecidePanel({ txId, previewUrl, checklist }: Props) {
     <div className="mt-4 space-y-4">
       {previewUrl ? (
         <div className="bg-white border rounded overflow-hidden">
-          <div className="text-xs px-3 py-2 bg-gray-50 border-b text-gray-600 flex items-center justify-between">
-            <span>Vista con watermark — para descargar la versión sin watermark debes aceptar.</span>
+          <div className="text-xs px-3 py-2 bg-gray-50 border-b text-gray-600">
+            Vista previa con watermark — la versión sin watermark se libera al aceptar.
           </div>
           <iframe
-            src={previewUrl}
+            src={`${previewUrl}#toolbar=0&navpanes=0&scrollbar=0`}
             className="w-full h-[600px] border-0"
             title="Preview del documento"
           />
