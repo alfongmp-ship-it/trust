@@ -373,6 +373,114 @@ export async function uploadDocumentAction(
 }
 
 // ============================================================
+// v2 — Decisión del buyer sobre el documento entregado (Fase 3)
+// ============================================================
+
+// Buyer acepta el documento: status entregada -> completada, libera
+// los fondos (en MVP simulado) y permite descargar la versión clean.
+export async function acceptDocumentAction(transactionId: string) {
+  const supabase = createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) redirect('/login')
+
+  const { data, error } = await supabase
+    .from('transactions')
+    .update({
+      status: 'completada',
+      resolved_at: new Date().toISOString(),
+    })
+    .eq('id', transactionId)
+    .eq('status', 'entregada')
+    .eq('buyer_id', user.id)
+    .select('id')
+
+  if (error) throw new Error(error.message)
+  if (!data || data.length === 0) {
+    throw new Error('No puedes aceptar en este momento.')
+  }
+
+  await revalidateTx(transactionId)
+}
+
+// Buyer pide una edición. Reusa dispute_buyer_comment como campo
+// genérico de "razón de rechazo" — el status discrimina entre
+// edición vs disputa.
+export async function requestEditAction(transactionId: string, comment: string) {
+  const supabase = createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) redirect('/login')
+
+  const cleanComment = (comment ?? '').trim().slice(0, 1000)
+  if (cleanComment.length === 0) {
+    throw new Error('Describe qué cambio necesitas.')
+  }
+
+  const { data, error } = await supabase
+    .from('transactions')
+    .update({
+      status: 'en_edicion',
+      dispute_buyer_comment: cleanComment,
+      dispute_point_id: null,
+    })
+    .eq('id', transactionId)
+    .eq('status', 'entregada')
+    .eq('buyer_id', user.id)
+    .select('id')
+
+  if (error) throw new Error(error.message)
+  if (!data || data.length === 0) {
+    throw new Error('No puedes pedir edición en este momento.')
+  }
+
+  await revalidateTx(transactionId)
+}
+
+// Buyer abre disputa: indica qué punto del checklist no se cumplió
+// + comentario. Fase 4 agrega la resolución con Claude.
+export async function openDocumentDisputeAction(
+  transactionId: string,
+  pointId: string,
+  comment: string,
+) {
+  const supabase = createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) redirect('/login')
+
+  const cleanComment = (comment ?? '').trim().slice(0, 2000)
+  if (!pointId) throw new Error('Selecciona un punto de la lista.')
+  if (cleanComment.length === 0) throw new Error('Describe por qué no se cumple ese punto.')
+
+  const { data, error } = await supabase
+    .from('transactions')
+    .update({
+      status: 'en_disputa',
+      dispute_point_id: pointId,
+      dispute_buyer_comment: cleanComment,
+      dispute_opened_at: new Date().toISOString(),
+      dispute_ai_verdict: null,
+      dispute_ai_reasoning: null,
+      dispute_seller_response: null,
+    })
+    .eq('id', transactionId)
+    .eq('status', 'entregada')
+    .eq('buyer_id', user.id)
+    .select('id')
+
+  if (error) throw new Error(error.message)
+  if (!data || data.length === 0) {
+    throw new Error('No puedes abrir disputa en este momento.')
+  }
+
+  await revalidateTx(transactionId)
+}
+
+// ============================================================
 // Legacy v1 — se mantienen para no romper txs viejas, pero el
 // flow nuevo (documento) no las usa. Borrar en Fase 6 cuando
 // se valide que ninguna tx legacy queda en producción.

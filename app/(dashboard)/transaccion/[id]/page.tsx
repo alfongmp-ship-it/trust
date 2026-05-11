@@ -7,7 +7,6 @@ import {
   markDeliveredAction,
   markCompletedAction,
   openDisputeAction,
-  closeDisputeAction,
 } from '../../transactions-actions'
 import {
   formatCurrency,
@@ -20,6 +19,9 @@ import type { TransactionWithParties } from '@/lib/supabase/types'
 import { Checklist } from './checklist'
 import { DepositButton } from './deposit-button'
 import { UploadForm } from './upload-form'
+import { DecidePanel } from './decide-panel'
+
+const DOC_STATUSES = ['entregada', 'en_edicion', 'en_disputa', 'completada', 'reembolsada']
 
 export default async function TransaccionPage({
   params,
@@ -57,6 +59,38 @@ export default async function TransaccionPage({
   const negotiationStatuses = ['borrador_lista', 'negociando_lista', 'lista_acordada']
   const canNegotiate = negotiationStatuses.includes(tx.status)
 
+  // Para estados post-entrega, traemos el último upload y generamos signed URLs.
+  let watermarkedUrl: string | null = null
+  let originalUrl: string | null = null
+
+  if (myRole && DOC_STATUSES.includes(tx.status)) {
+    const { data: files } = await supabase
+      .from('files')
+      .select('kind, version, storage_path')
+      .eq('transaction_id', tx.id)
+      .order('version', { ascending: false })
+
+    if (files && files.length > 0) {
+      const maxVersion = files[0].version
+      const watermarked = files.find((f) => f.version === maxVersion && f.kind === 'watermarked')
+      const original = files.find((f) => f.version === maxVersion && f.kind === 'original')
+
+      if (watermarked?.storage_path) {
+        const { data } = await supabase.storage
+          .from('documents')
+          .createSignedUrl(watermarked.storage_path, 3600)
+        watermarkedUrl = data?.signedUrl ?? null
+      }
+      // El PDF clean sólo se entrega al buyer una vez completada la tx.
+      if (original?.storage_path && tx.status === 'completada' && isBuyer) {
+        const { data } = await supabase.storage
+          .from('documents')
+          .createSignedUrl(original.storage_path, 3600)
+        originalUrl = data?.signedUrl ?? null
+      }
+    }
+  }
+
   return (
     <div className="max-w-2xl">
       <div className="flex items-center justify-between mb-4">
@@ -87,6 +121,9 @@ export default async function TransaccionPage({
         {tx.delivery_uploaded_at && (
           <Row label="Entregado el" value={formatDate(tx.delivery_uploaded_at)} />
         )}
+        {tx.dispute_opened_at && (
+          <Row label="Disputa abierta" value={formatDate(tx.dispute_opened_at)} />
+        )}
         {tx.resolved_at && <Row label="Resuelta el" value={formatDate(tx.resolved_at)} />}
         <Row label="Creada" value={formatDate(tx.created_at)} />
       </dl>
@@ -104,7 +141,14 @@ export default async function TransaccionPage({
         />
       )}
 
-      <Actions tx={tx} isSeller={isSeller} isBuyer={isBuyer} canClaim={canClaim} />
+      <Actions
+        tx={tx}
+        isSeller={isSeller}
+        isBuyer={isBuyer}
+        canClaim={canClaim}
+        watermarkedUrl={watermarkedUrl}
+        originalUrl={originalUrl}
+      />
     </div>
   )
 }
@@ -114,11 +158,15 @@ function Actions({
   isSeller,
   isBuyer,
   canClaim,
+  watermarkedUrl,
+  originalUrl,
 }: {
   tx: TransactionWithParties
   isSeller: boolean
   isBuyer: boolean
   canClaim: boolean
+  watermarkedUrl: string | null
+  originalUrl: string | null
 }) {
   // Unclaimed: buyer (no seller) puede reclamar
   if (canClaim) {
@@ -176,25 +224,88 @@ function Actions({
   }
 
   if (tx.status === 'entregada') {
-    return isBuyer ? (
-      <Info text="Documento entregado. Próximamente: ver preview y aceptar / pedir edición / disputar." />
-    ) : (
-      <Info text="Documento entregado. Esperando que el comprador revise." />
+    if (isBuyer) {
+      return (
+        <DecidePanel
+          txId={tx.id}
+          previewUrl={watermarkedUrl}
+          checklist={tx.checklist ?? []}
+        />
+      )
+    }
+    return (
+      <div className="mt-4 space-y-3">
+        <Info text="Documento entregado. Esperando que el comprador revise." />
+        {watermarkedUrl && <PreviewIframe url={watermarkedUrl} label="Tu versión con watermark (lo que ve el comprador):" />}
+      </div>
     )
   }
 
   if (tx.status === 'en_edicion') {
-    return isSeller ? (
-      <UploadForm txId={tx.id} label="Subir nueva versión" />
-    ) : (
-      <Info text="Edición solicitada. Esperando al vendedor." />
+    if (isSeller) {
+      return (
+        <div className="mt-4 space-y-3">
+          <div className="bg-yellow-50 border border-yellow-200 rounded p-3 text-sm">
+            <div className="font-medium mb-1">El comprador pidió una edición:</div>
+            <div className="text-gray-800 whitespace-pre-wrap">
+              {tx.dispute_buyer_comment || '(sin comentario)'}
+            </div>
+          </div>
+          <UploadForm txId={tx.id} label="Subir nueva versión" />
+        </div>
+      )
+    }
+    return (
+      <Info
+        text={`Pediste edición${tx.dispute_buyer_comment ? `: "${tx.dispute_buyer_comment}"` : ''}. Esperando al vendedor.`}
+      />
+    )
+  }
+
+  if (tx.status === 'en_disputa') {
+    const disputedItem = (tx.checklist ?? []).find((it) => it.id === tx.dispute_point_id)
+    return (
+      <div className="mt-4 space-y-3">
+        <div className="bg-red-50 border border-red-200 rounded p-4 text-sm space-y-2">
+          <div className="font-medium">Disputa abierta</div>
+          {disputedItem && (
+            <div>
+              <span className="text-gray-600">Punto incumplido: </span>
+              <span className="text-gray-900">{disputedItem.text}</span>
+            </div>
+          )}
+          {tx.dispute_buyer_comment && (
+            <div>
+              <span className="text-gray-600">Argumento del comprador: </span>
+              <span className="text-gray-900 whitespace-pre-wrap">{tx.dispute_buyer_comment}</span>
+            </div>
+          )}
+          <div className="text-xs text-gray-500 mt-2">
+            Próximamente (Fase 4): el vendedor responde y una IA imparcial evalúa el caso.
+          </div>
+        </div>
+        {watermarkedUrl && <PreviewIframe url={watermarkedUrl} label="Documento en disputa:" />}
+      </div>
     )
   }
 
   if (tx.status === 'completada') {
     return (
-      <div className="mt-4 bg-green-50 border border-green-200 rounded p-4 text-sm text-green-900">
-        Transacción completada{tx.resolved_at ? ` el ${formatDate(tx.resolved_at)}` : ''}.
+      <div className="mt-4 space-y-3">
+        <div className="bg-green-50 border border-green-200 rounded p-4 text-sm text-green-900">
+          ✓ Transacción completada{tx.resolved_at ? ` el ${formatDate(tx.resolved_at)}` : ''}.
+          {isSeller && ' Cobraste los fondos (modo demo).'}
+        </div>
+        {isBuyer && originalUrl && (
+          <a
+            href={originalUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-block bg-black text-white rounded px-4 py-2 text-sm font-medium hover:bg-gray-800"
+          >
+            Descargar documento (sin watermark)
+          </a>
+        )}
       </div>
     )
   }
@@ -202,7 +313,7 @@ function Actions({
   if (tx.status === 'reembolsada') {
     return (
       <div className="mt-4 bg-red-50 border border-red-200 rounded p-4 text-sm text-red-900">
-        Fondos reembolsados al comprador{tx.resolved_at ? ` el ${formatDate(tx.resolved_at)}` : ''}.
+        Fondos reembolsados al comprador{tx.resolved_at ? ` el ${formatDate(tx.resolved_at)}` : ''} (modo demo).
       </div>
     )
   }
@@ -269,21 +380,6 @@ function Actions({
     return <Info text="Esperando que el comprador apruebe la entrega." />
   }
 
-  if (tx.status === 'en_disputa') {
-    return (
-      <div className="mt-4 space-y-3">
-        <div className="bg-red-50 border border-red-200 rounded p-3 text-sm text-red-900">
-          Esta transacción está en disputa.
-        </div>
-        <form action={closeDisputeAction.bind(null, tx.id)}>
-          <button type="submit" className={btnPrimary}>
-            Cerrar disputa
-          </button>
-        </form>
-      </div>
-    )
-  }
-
   if (tx.status === 'completado') {
     return (
       <div className="mt-4 bg-green-50 border border-green-200 rounded p-4 text-sm text-green-900">
@@ -293,6 +389,15 @@ function Actions({
   }
 
   return null
+}
+
+function PreviewIframe({ url, label }: { url: string; label: string }) {
+  return (
+    <div className="bg-white border rounded overflow-hidden">
+      <div className="text-xs px-3 py-2 bg-gray-50 border-b text-gray-600">{label}</div>
+      <iframe src={url} className="w-full h-[500px] border-0" title="Preview" />
+    </div>
+  )
 }
 
 function Row({
